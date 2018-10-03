@@ -93,6 +93,12 @@ local options = {
       enum = {'default', 'restart'},
       train_state = true
     }
+  },
+  {
+    '-decay_patience',1,
+    [[If `-decay score_only` is set, consider this number of iterations (default:1) to check if core has improved or it's time to start the decay]],
+    valid = onmt.utils.ExtendedCmdLine.isUInt(),
+    train_state = true
   }
 }
 
@@ -103,6 +109,7 @@ end
 function Optim:__init(args)
   self.args = onmt.utils.ExtendedCmdLine.getModuleOpts(args, options)
   self.valPerf = {}
+  self.buffScores = {}
 end
 
 function Optim:setOptimStates(states)
@@ -203,7 +210,50 @@ function Optim:updateLearningRate(score, epoch, evaluator)
     if self.valPerf[#self.valPerf] ~= nil and self.valPerf[#self.valPerf-1] ~= nil then
       local currScore = self.valPerf[#self.valPerf]
       local prevScore = self.valPerf[#self.valPerf-1]
-      scoreCondMet = not evaluator:compare(currScore, prevScore, self.args.start_decay_score_delta)
+      if self.args.decay_patience > 1 then
+        --[[_G.logger:info("BuffScores size: " .. #self.buffScores)]]--
+        local checkIterations = self.args.decay_patience - 1
+        if #self.buffScores > 0 and #self.buffScores >= checkIterations then
+          --[[_G.logger:info("Decay score patience set. Threshold: " .. self.args.decay_patience)--]]
+          bestVal = math.min(table.unpack(self.buffScores))
+          for k,v in pairs(self.buffScores) do
+             _G.logger:info("buffScores[]=" .. v .. "(iteration " .. (#self.valPerf - (#self.valPerf-k)) .. ")")
+          end
+          _G.logger:info("currScore: " .. currScore)
+          _G.logger:info("bestVal: " .. bestVal)
+          --[[_G.logger:info("Best evaluation score so far: " .. bestVal)]]--
+          if currScore >= bestVal then
+             _G.logger:info("I got an equal or worse evaluation score than I had: " .. currScore .. " vs. " .. bestVal)
+             --[[_G.logger:info("I'm checking the last " .. checkIterations .. " iterations to see how much patience I've got left")--]]
+             scoreCondMet = true
+             for i=0,checkIterations-1,1 do
+                 if self.buffScores[#self.buffScores-i] == bestVal then
+                    scoreCondMet = false
+                    _G.logger:info("I've still got patience!")
+                    break
+                 end
+             end
+             if(scoreCondMet) then
+                _G.logger:info("No patience left! Last " .. checkIterations .. " returned no better score than " .. bestVal)
+                --[[self.buffScores = {}]]--
+             end
+           --[[DO NOTHING, 1st iteration of the next decay block--]]
+          else
+             _G.logger:info("This iteration improved my best score " .. currScore .. " vs. " .. bestVal .. ". I'm full of patience!")
+             scoreCondMet = false
+          end
+        end
+      else
+        scoreCondMet = not evaluator:compare(currScore, prevScore, self.args.start_decay_score_delta)
+      end
+    end
+
+    if self.args.decay_patience > 1 then
+       if scoreCondMet then
+          self.buffScores = {}
+       elseif self.valPerf[#self.valPerf] ~= nil then
+          table.insert(self.buffScores,self.valPerf[#self.valPerf])
+       end
     end
 
     if self.args.decay == 'default' and (epochCondMet or scoreCondMet or self.startDecay) then
