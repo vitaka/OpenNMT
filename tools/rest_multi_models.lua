@@ -143,11 +143,17 @@ local function translateMessage(server, lines)
       for bi = 1, translator.args.n_best do
         local srcSent = translator:buildOutput(batch[b])
         local predSent
+
         res, err = pcall(function()
-          predSent = tokenizer.detokenize(options,
+          if options.detokenize_output == false then
+               predSent = translator:buildOutput(results[b].preds[bi])
+           else
+               predSent = tokenizer.detokenize(options,
                                           results[b].preds[bi].words,
                                           results[b].preds[bi].features)
+          end
         end)
+
         if not res then
           if string.find(err,"interrupted") then
             error("interrupted")
@@ -263,5 +269,3 @@ local function main()
 end
 
 main()
-
-
